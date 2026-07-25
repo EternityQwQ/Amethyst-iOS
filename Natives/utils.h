@@ -47,6 +47,10 @@
 //     persistent mapped buffers / texture buffers 正常工作
 //   - Fragment shader 编译失败时忽略错误，让 BSL/Mellow 等光影包能运行
 #define RENDERER_NAME_LTW "libltw.dylib"
+// Mithril-Wrapper - OpenGL 3.3 Core → Metal 翻译层
+// 自带 EGL 1.5 + OpenGL 3.3 Core 入口，宿主通过 dlopen + dlsym 加载。
+// 与 LTW/ANGLE 不同：Mithril 直接翻译到 Metal 2，无需中间 OpenGL ES 层。
+#define RENDERER_NAME_MITHRIL "libmithril.dylib"
 
 #define SPECIALBTN_KEYBOARD -1
 #define SPECIALBTN_TOGGLECTRL -2

@@ -23,9 +23,15 @@ static void* load_egl_symbol(void *dl_handle, const char *symbol) {
 }
 
 static bool dlsym_EGL() {
-    // MobileGL 已移除，EGL 符号始终从 ANGLE（libtinygl4angle.dylib）解析。
+    // EGL 符号默认从 ANGLE（libtinygl4angle.dylib）解析。
+    // Mithril 模式下从 libmithril.dylib 解析所有 EGL 符号（Mithril 自带 EGL 1.5）。
+    // LTW 模式仍从 ANGLE 解析大部分符号，仅 eglCreateContext/Destroy/MakeCurrent
+    // 从 libltw.dylib 解析（见下方 useLTW 分支）。
     const char *renderer = getenv("AMETHYST_RENDERER");
-    const char *eglLibrary = RENDERER_NAME_MTL_ANGLE;
+    const char *eglLibrary = RENDERER_NAME_MTL_ANGLE;  // 默认：ANGLE
+    if (renderer != NULL && strcmp(renderer, RENDERER_NAME_MITHRIL) == 0) {
+        eglLibrary = RENDERER_NAME_MITHRIL;
+    }
     NSString *eglPath = [NSString stringWithFormat:@"@rpath/%s", eglLibrary ?: ""];
     void* dl_handle = dlopen(eglPath.UTF8String, RTLD_NOW | RTLD_GLOBAL);
     if (!dl_handle) {

@@ -155,6 +155,10 @@ int pojavInitOpenGL() {
         NSLog(@"[egl_bridge] LTW renderer: preloading ANGLE as host EGL before LTW init");
         dlopen("@rpath/" RENDERER_NAME_MTL_ANGLE, RTLD_GLOBAL);
         set_gl_bridge_tbl();
+    } else if ([renderer isEqualToString:@ RENDERER_NAME_MITHRIL]) {
+        // Mithril-Wrapper 自带 EGL 1.5 + OpenGL 3.3 Core → Metal 翻译，
+        // 走标准 GL bridge 路径，无需 ANGLE 预加载（与 LTW 不同）。
+        set_gl_bridge_tbl();
     } else if ([renderer hasPrefix:@"libOSMesa"]) {
         setenv("GALLIUM_DRIVER","zink",1);
         set_osm_bridge_tbl();
