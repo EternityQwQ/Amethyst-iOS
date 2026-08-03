@@ -796,10 +796,76 @@ int launchJVM(NSString *accountId, id launchTarget, int width, int height, int m
             setenv("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", "1", 1);
             setenv("MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS", "1", 1);
         }
+
+        // ============================================================================
+        // MobileGL 渲染器注入（Amethyst-IOS-MGL 分支）
+        // ============================================================================
+        // MobileGL 是跨平台 Vulkan/GLES 后端，libMobileGL.dylib 由 CI 从 EternityQwQ/MobileGL
+        // 仓库的 artifact 下载并打包到 .app/Frameworks/（见 CMakeLists.txt 的 MobileGL 集成段）。
+        //
+        // 注入策略（双层）：
+        //   1. dlopen() 立即加载：Amethyst 的 JVM 通过 pJLI_Launch 在进程内启动
+        //      （非 posix_spawn 子进程），DYLD_INSERT_LIBRARIES 只在 dyld 进程启动时读取，
+        //      对已运行进程无效。因此必须显式 dlopen 把 MobileGL 加载到当前进程。
+        //   2. setenv DYLD_INSERT_LIBRARIES：为子进程场景（如 Java 调用 Runtime.exec
+        //      启动子 JVM）或未来若改为 posix_spawn 启动 JVM 时生效。当前进程内是 no-op，
+        //      但保留以保持语义完整性和文档作用。
+        //
+        // 运行时可行性限制（如实记录）：
+        //   - DYLD_INSERT_LIBRARIES 在 iOS 上需要 entitlement
+        //     com.apple.security.cs.allow-dyld-environment-variables（已添加到
+        //     entitlements.trollstore.xml / entitlements.sideload.xml）
+        //   - 即便有 entitlement，DYLD_INSERT_LIBRARIES 仍只在进程启动时被 dyld 读取，
+        //     setenv 后对当前进程无效，仅影响后续 posix_spawn/execve 的子进程
+        //   - 因此本实现依赖 dlopen() 进行实际加载，DYLD_INSERT_LIBRARIES 仅为兜底
+        //   - 真机运行时验证不在本次任务范围
+        if (strcmp(glLibName, RENDERER_NAME_MOBILEGL) == 0) {
+            NSString *mobileglPath = [frameworksPath stringByAppendingPathComponent:@"libMobileGL.dylib"];
+            NSLog(@"[JavaLauncher] MobileGL renderer detected, dylib expected at: %@", mobileglPath);
+
+            // 设置 MOBILEGL_BACKEND_TYPE=DirectVulkan
+            // MobileGL 支持多种后端（DirectVulkan / Metal / GLES），
+            // DirectVulkan 通过运行时 dlopen libMoltenVK.dylib 提供 Vulkan 实现
+            // （VMA_DYNAMIC_VULKAN_FUNCTIONS=1，不硬链接 MoltenVK）
+            setenv("MOBILEGL_BACKEND_TYPE", "DirectVulkan", 1);
+            NSLog(@"[JavaLauncher] MobileGL: MOBILEGL_BACKEND_TYPE=DirectVulkan");
+
+            // DYLD_INSERT_LIBRARIES：仅供子进程场景使用（见上方注释）
+            setenv("DYLD_INSERT_LIBRARIES", mobileglPath.UTF8String, 1);
+            NSLog(@"[JavaLauncher] MobileGL: DYLD_INSERT_LIBRARIES set (affects child processes only, current process uses dlopen)");
+
+            // 实际加载：dlopen 把 libMobileGL.dylib 加载到当前进程
+            // RTLD_GLOBAL：符号进入全局符号表，供后续 Java/Native 代码 dlsym 使用
+            void *mobileglHandle = dlopen(mobileglPath.UTF8String, RTLD_GLOBAL);
+            if (mobileglHandle) {
+                NSLog(@"[JavaLauncher] MobileGL loaded in-process via dlopen: %@ (handle=%p)", mobileglPath, mobileglHandle);
+            } else {
+                const char *dlErr = dlerror();
+                NSLog(@"[JavaLauncher] MobileGL dlopen FAILED: %s (path=%@)", dlErr ?: "(null)", mobileglPath);
+                NSLog(@"[JavaLauncher] MobileGL dylib may be missing from .app/Frameworks/. "
+                      @"Ensure CI downloaded the artifact to Natives/external/MobileGL/libMobileGL.dylib "
+                      @"and CMake POST_BUILD copied it to the build dir.");
+            }
+
+            // VK_ICD_FILENAMES：MobileGL 的 DirectVulkan 后端会通过 vkCreateInstance
+            // 加载 Vulkan ICD。iOS 上 MoltenVK 已打包在 .app/Frameworks/libMoltenVK.dylib，
+            // MobileGL 因 VMA_DYNAMIC_VULKAN_FUNCTIONS=1 会运行时 dlopen 该 dylib 获取
+            // vkGetInstanceProcAddr。MoltenVK 自身不需要外部 ICD json（它是 ICD 本体），
+            // 此处不设置 VK_ICD_FILENAMES，让 MoltenVK 默认行为生效。
+        }
+
         // 对齐 Ynnyny：使用独立变量 openglLibName，不修改 glLibName（保持原值用于后续判断）
         const char *openglLibName = (strcmp(glLibName, RENDERER_NAME_VULKAN) == 0)
             ? RENDERER_NAME_MOBILEGLUES
             : glLibName;
+        // MobileGL：覆盖 openglLibName 为裸名 "MobileGL"
+        // LWJGL Library.loadNative 会对 libname 加 "lib" 前缀和 ".dylib" 后缀，
+        // 得到 "libMobileGL.dylib"（正确文件名）。
+        // 不能传 "libMobileGL.dylib"（会被包装成 "liblibMobileGL.dylib.dylib"），
+        // 也不能传 glLibName="mobilegl"（会被包装成 "libmobilegl.dylib"，小写文件名错误）。
+        if (strcmp(glLibName, RENDERER_NAME_MOBILEGL) == 0) {
+            openglLibName = "MobileGL";
+        }
 
         PUSH_MARGV_FORMAT(@"-Dorg.lwjgl.opengl.libname=%s", openglLibName);
 

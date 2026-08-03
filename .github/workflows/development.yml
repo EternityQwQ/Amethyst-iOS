@@ -79,6 +79,80 @@ jobs:
           GIT_LFS_SKIP_SMUDGE: "1"
         run: git submodule update --init --recursive
 
+      - name: Download MobileGL iOS dylib (Amethyst-IOS-MGL only)
+        # 仅在 Amethyst-IOS-MGL 分支或手动触发时下载 MobileGL iOS dylib + MoltenVK iOS。
+        # MobileGL dylib 由 EternityQwQ/MobileGL 仓库的 CI 构建（ios-dylib.yml workflow），
+        # artifact 名格式：libMobileGL-ios-arm64-<run_id>。
+        # 跨仓库下载 artifact 需要令牌：使用仓库 secret MOBILEGL_CI_TOKEN（PAT，加密存储）。
+        if: github.ref == 'refs/heads/Amethyst-IOS-MGL' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.MOBILEGL_CI_TOKEN }}
+        run: |
+          set -e
+          mkdir -p Natives/external/MobileGL
+
+          # 动态获取 MobileGL iOS dylib 最新成功 run（避免 artifact 过期导致构建失败）
+          # 优先尝试已知的 run id（30808897311），失败则回退到最新成功 run
+          KNOWN_RUN_ID=30808897311
+          KNOWN_ARTIFACT="libMobileGL-ios-arm64-${KNOWN_RUN_ID}"
+
+          echo "尝试下载已知 run id=${KNOWN_RUN_ID}, artifact=${KNOWN_ARTIFACT}"
+          if gh run download ${KNOWN_RUN_ID} --repo EternityQwQ/MobileGL \
+            --name ${KNOWN_ARTIFACT} --dir Natives/external/MobileGL 2>/dev/null; then
+            echo "已知 run id 下载成功"
+            RUN_ID=${KNOWN_RUN_ID}
+          else
+            echo "已知 run id 下载失败（artifact 可能已过期或 run 不存在），回退到最新成功 run"
+            RUN_ID=$(gh run list --repo EternityQwQ/MobileGL \
+              --workflow ios-dylib.yml --status success --limit 1 \
+              --json databaseId --jq '.[0].databaseId')
+            if [ -z "${RUN_ID}" ]; then
+              echo "ERROR: 未找到 MobileGL iOS dylib 的成功 workflow run"
+              exit 1
+            fi
+            ARTIFACT_NAME="libMobileGL-ios-arm64-${RUN_ID}"
+            echo "使用最新成功 run: id=${RUN_ID}, artifact=${ARTIFACT_NAME}"
+            gh run download ${RUN_ID} --repo EternityQwQ/MobileGL \
+              --name ${ARTIFACT_NAME} --dir Natives/external/MobileGL
+          fi
+
+          ls -lh Natives/external/MobileGL/
+
+          # 修复 install_name（CMake POST_BUILD 也会做，提前做避免 CMake 阶段问题）
+          if [ -f Natives/external/MobileGL/libMobileGL.dylib ]; then
+            install_name_tool -id @rpath/libMobileGL.dylib Natives/external/MobileGL/libMobileGL.dylib
+            echo "libMobileGL.dylib install_name 修复完成:"
+            otool -D Natives/external/MobileGL/libMobileGL.dylib
+          else
+            echo "ERROR: libMobileGL.dylib 未下载到 Natives/external/MobileGL/"
+            ls -la Natives/external/MobileGL/
+            exit 1
+          fi
+
+          # 可选：下载 MoltenVK iOS 最新 release（MobileGL DirectVulkan 后端运行时依赖）
+          # 失败不阻断构建（Natives/resources/Frameworks/libMoltenVK.dylib 已有旧版作为 fallback）
+          echo "=== 尝试下载 MoltenVK iOS 最新 release ==="
+          TEMP_MVK=$(mktemp -d)
+          if gh release download --repo KhronosGroup/MoltenVK --dir ${TEMP_MVK} --pattern 'MoltenVK.tar.gz'; then
+            tar -xzf ${TEMP_MVK}/MoltenVK.tar.gz -C ${TEMP_MVK}
+            if [ -f ${TEMP_MVK}/MoltenVK/dylib/iOS/libMoltenVK.dylib ]; then
+              cp ${TEMP_MVK}/MoltenVK/dylib/iOS/libMoltenVK.dylib Natives/external/MobileGL/libMoltenVK.dylib
+              install_name_tool -id @rpath/libMoltenVK.dylib Natives/external/MobileGL/libMoltenVK.dylib
+              echo "MoltenVK iOS dylib 下载完成:"
+              ls -lh Natives/external/MobileGL/libMoltenVK.dylib
+              otool -D Natives/external/MobileGL/libMoltenVK.dylib
+            else
+              echo "WARNING: MoltenVK.tar.gz 解压后未找到 iOS dylib (MoltenVK/dylib/iOS/libMoltenVK.dylib)，跳过"
+              find ${TEMP_MVK} -name 'libMoltenVK*' -print 2>/dev/null || true
+            fi
+          else
+            echo "WARNING: MoltenVK release 下载失败，跳过（使用 Natives/resources/Frameworks/libMoltenVK.dylib fallback）"
+          fi
+          rm -rf ${TEMP_MVK}
+
+          echo "=== MobileGL 集成资源就绪 ==="
+          ls -lh Natives/external/MobileGL/
+
       - name: Build for ${{ matrix.platform_name }}
         env:
           IPHONEOS_DEPLOYMENT_TARGET: 14.0

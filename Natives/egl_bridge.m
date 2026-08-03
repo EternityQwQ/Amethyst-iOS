@@ -135,6 +135,28 @@ int pojavInitOpenGL() {
         NSLog(@"[egl_bridge] LTW renderer: preloading ANGLE as host EGL before LTW init");
         dlopen("@rpath/" RENDERER_NAME_MTL_ANGLE, RTLD_GLOBAL);
         set_gl_bridge_tbl();
+    } else if ([renderer isEqualToString:@ RENDERER_NAME_MOBILEGL]) {
+        // MobileGL 渲染器：跨平台 Vulkan/GLES 后端
+        //
+        // 与其他渲染器的关键区别：
+        //   - libMobileGL.dylib 由 JavaLauncher.m 在 JVM 启动前通过 dlopen() 加载到当前进程
+        //     （同时设置 DYLD_INSERT_LIBRARIES 供子进程场景使用，详见 JavaLauncher.m）。
+        //   - 此处不需要 dlopen("@rpath/libMobileGL.dylib")，因为 dylib 已在进程内。
+        //   - 因此 RENDERER_NAME_MOBILEGL 是逻辑名 "mobilegl"，而非 dylib 文件名。
+        //
+        // 此分支仅建立 GL bridge 表（set_gl_bridge_tbl），让 EGL/GL 调用路径有真实上下文。
+        // MobileGL 通过 hook EGL/GL 入口将调用路由到 DirectVulkan 后端
+        // （MOBILEGL_BACKEND_TYPE=DirectVulkan，由 JavaLauncher.m 设置）。
+        //
+        // 提前 return 跳过下方的 JNI_LWJGL_changeRenderer + dlopen 默认路径：
+        //   - JNI_LWJGL_changeRenderer("mobilegl") 会设置 org.lwjgl.opengl.libname=mobilegl，
+        //     LWJGL 加载 libmobilegl.dylib（小写，文件名错误）。libname 由 JavaLauncher.m
+        //     显式设置 -Dorg.lwjgl.opengl.libname=MobileGL（裸名，LWJGL 加载 libMobileGL.dylib）。
+        //   - dlopen("@rpath/mobilegl") 会失败（无此文件）。
+        NSLog(@"[egl_bridge] MobileGL renderer: GL bridge table set (dylib injected by JavaLauncher.m)");
+        setenv("AMETHYST_RENDERER", renderer.UTF8String, 1);
+        set_gl_bridge_tbl();
+        return !br_init();
     } else if ([renderer hasPrefix:@"libOSMesa"]) {
         setenv("GALLIUM_DRIVER","zink",1);
         set_osm_bridge_tbl();

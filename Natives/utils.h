@@ -48,6 +48,14 @@
 //   - Fragment shader 编译失败时忽略错误，让 BSL/Mellow 等光影包能运行
 #define RENDERER_NAME_LTW "libltw.dylib"
 
+// MobileGL - 跨平台 Vulkan/GLES 渲染器后端
+// 与其他 RENDERER_NAME_* 不同：MobileGL 不通过 dlopen("@rpath/<name>") 加载，
+// 而是由 JavaLauncher.m 在 JVM 启动前用 dlopen + DYLD_INSERT_LIBRARIES 注入。
+// 因此 RENDERER_NAME_MOBILEGL 是逻辑渲染器名（"mobilegl"），非 dylib 文件名。
+// 实际 dylib 文件名为 libMobileGL.dylib，由 JavaLauncher.m 显式 dlopen 加载。
+// egl_bridge.m 的 mobilegl 分支会提前 return，跳过默认的 dlopen("@rpath/<name>") 路径。
+#define RENDERER_NAME_MOBILEGL "mobilegl"
+
 #define SPECIALBTN_KEYBOARD -1
 #define SPECIALBTN_TOGGLECTRL -2
 #define SPECIALBTN_MOUSEPRI -3

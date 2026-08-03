@@ -535,6 +535,61 @@ else()
   message(STATUS "ModLoaderIcons directory not found: ${MODLOADER_ICONS_DIR}")
 endif()
 
+# ============================================================================
+# MobileGL iOS dylib 集成（Amethyst-IOS-MGL 分支）
+# ============================================================================
+# MobileGL 是跨平台 Vulkan/GLES 渲染器后端。iOS dylib 由 MobileGL 仓库的
+# CI 构建（arm64 / platform IOS / minos 14.0），自包含不依赖外部符号
+# （MoltenVK 运行时通过 dlopen 动态加载，因 VMA_DYNAMIC_VULKAN_FUNCTIONS=1）。
+#
+# 在 Amethyst-IOS-MGL 分支，CI workflow 通过 gh run download 从 EternityQwQ/MobileGL
+# 仓库的 artifact 下载 libMobileGL.dylib 放入 Natives/external/MobileGL/。
+# 本地开发者也可手动放入该路径。
+#
+# 检测到 dylib 后：
+#   1. POST_BUILD 拷贝到 ${CMAKE_BINARY_DIR}/libMobileGL.dylib
+#   2. install_name_tool -id @rpath/libMobileGL.dylib 修复 install_name
+#   3. Makefile payload 目标的 `cp $(WORKINGDIR)/*.dylib .../Frameworks/` 会
+#      自动拷贝到 .app/Frameworks/libMobileGL.dylib
+#   4. rpath 已包含 @executable_path/Frameworks 和 @loader_path/Frameworks
+#      （见上方 CMAKE_EXE_LINKER_FLAGS），@rpath/libMobileGL.dylib 能正确解析
+#
+# 可选：若 Natives/external/MobileGL/libMoltenVK.dylib 存在（CI 下载的 KhronosGroup
+# 最新版 MoltenVK iOS），同样处理，会覆盖 Natives/resources/Frameworks/ 中的旧版。
+#
+# 未检测到时不阻断编译（STATUS 提示），方便无 MobileGL 的开发者构建。
+set(MOBILEGL_DYLIB_SRC "${CMAKE_CURRENT_LIST_DIR}/external/MobileGL/libMobileGL.dylib")
+if(EXISTS "${MOBILEGL_DYLIB_SRC}")
+  message(STATUS "Found MobileGL iOS dylib: ${MOBILEGL_DYLIB_SRC}")
+  add_custom_command(TARGET AngelAuraAmethyst POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MOBILEGL_DYLIB_SRC}"
+            "${CMAKE_BINARY_DIR}/libMobileGL.dylib"
+    COMMAND install_name_tool -id @rpath/libMobileGL.dylib
+            "${CMAKE_BINARY_DIR}/libMobileGL.dylib"
+    COMMENT "MobileGL: copy dylib to build dir and set install_name=@rpath/libMobileGL.dylib"
+  )
+else()
+  message(STATUS "MobileGL dylib not found at ${MOBILEGL_DYLIB_SRC}, skipping (renderer=mobilegl will fail at runtime)")
+endif()
+
+# 可选：MoltenVK iOS（MobileGL 的 DirectVulkan 后端运行时依赖）
+# 若 CI 从 KhronosGroup/MoltenVK release 下载了新版 iOS dylib 放入
+# Natives/external/MobileGL/libMoltenVK.dylib，则覆盖 Natives/resources/Frameworks/
+# 中的旧版本（Makefile payload 中 build dylib 的 cp 步骤在 resources cp 之后执行）。
+set(MOLTENVK_IOS_DYLIB_SRC "${CMAKE_CURRENT_LIST_DIR}/external/MobileGL/libMoltenVK.dylib")
+if(EXISTS "${MOLTENVK_IOS_DYLIB_SRC}")
+  message(STATUS "Found MoltenVK iOS dylib (MobileGL-provided): ${MOLTENVK_IOS_DYLIB_SRC}")
+  add_custom_command(TARGET AngelAuraAmethyst POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MOLTENVK_IOS_DYLIB_SRC}"
+            "${CMAKE_BINARY_DIR}/libMoltenVK.dylib"
+    COMMAND install_name_tool -id @rpath/libMoltenVK.dylib
+            "${CMAKE_BINARY_DIR}/libMoltenVK.dylib"
+    COMMENT "MoltenVK(MobileGL): copy dylib to build dir and set install_name=@rpath/libMoltenVK.dylib"
+  )
+endif()
+
 if("${CMAKE_HOST_SYSTEM_NAME}" MATCHES "Linux|^GNU$|Android")
   target_sources(AngelAuraAmethyst PUBLIC non_darwin_utils.m)
 endif()
