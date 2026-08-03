@@ -131,18 +131,22 @@ jobs:
 
           # 可选：下载 MoltenVK iOS 最新 release（MobileGL DirectVulkan 后端运行时依赖）
           # 失败不阻断构建（Natives/resources/Frameworks/libMoltenVK.dylib 已有旧版作为 fallback）
+          # 注意：KhronosGroup/MoltenVK release 的 asset 命名格式为 MoltenVK-ios.tar / MoltenVK-all.tar
+          # （非 MoltenVK.tar.gz），且为未压缩 tar（用 tar -xf 而非 tar -xzf）
           echo "=== 尝试下载 MoltenVK iOS 最新 release ==="
           TEMP_MVK=$(mktemp -d)
-          if gh release download --repo KhronosGroup/MoltenVK --dir ${TEMP_MVK} --pattern 'MoltenVK.tar.gz'; then
-            tar -xzf ${TEMP_MVK}/MoltenVK.tar.gz -C ${TEMP_MVK}
-            if [ -f ${TEMP_MVK}/MoltenVK/dylib/iOS/libMoltenVK.dylib ]; then
-              cp ${TEMP_MVK}/MoltenVK/dylib/iOS/libMoltenVK.dylib Natives/external/MobileGL/libMoltenVK.dylib
+          if gh release download --repo KhronosGroup/MoltenVK --dir ${TEMP_MVK} --pattern 'MoltenVK-ios.tar'; then
+            tar -xf ${TEMP_MVK}/MoltenVK-ios.tar -C ${TEMP_MVK}
+            # 查找 iOS dylib（路径可能是 MoltenVK/dylib/iOS/libMoltenVK.dylib 或 MoltenVK/MoltenVK/dylib/iOS/...）
+            MVK_DYLIB=$(find ${TEMP_MVK} -name 'libMoltenVK.dylib' -path '*/iOS/*' | head -1)
+            if [ -n "${MVK_DYLIB}" ] && [ -f "${MVK_DYLIB}" ]; then
+              cp "${MVK_DYLIB}" Natives/external/MobileGL/libMoltenVK.dylib
               install_name_tool -id @rpath/libMoltenVK.dylib Natives/external/MobileGL/libMoltenVK.dylib
-              echo "MoltenVK iOS dylib 下载完成:"
+              echo "MoltenVK iOS dylib 下载完成 (source: ${MVK_DYLIB}):"
               ls -lh Natives/external/MobileGL/libMoltenVK.dylib
               otool -D Natives/external/MobileGL/libMoltenVK.dylib
             else
-              echo "WARNING: MoltenVK.tar.gz 解压后未找到 iOS dylib (MoltenVK/dylib/iOS/libMoltenVK.dylib)，跳过"
+              echo "WARNING: MoltenVK-ios.tar 解压后未找到 iOS dylib，列出所有 libMoltenVK*:"
               find ${TEMP_MVK} -name 'libMoltenVK*' -print 2>/dev/null || true
             fi
           else
